@@ -1,0 +1,268 @@
+#! /usr/bin/env python
+
+from __future__ import print_function
+import pandas as pd
+import numpy as np
+import statsmodels.api as sm
+import math
+
+# print the first 10 line from file
+# n=10
+# f=open("C:\Users\i637308\Desktop\QP_lookalike\qp_test.csv",)
+# for i in range(n):
+#     line=f.next().strip()
+#     print line
+# f.close()
+
+df = pd.read_csv("C:\Users\i637308\Desktop\QP_lookalike\qp_test.csv", dtype='unicode')
+
+pd.set_option('display.max_columns', 500)
+pd.set_option('display.max_rows', 500)
+pd.set_option('display.width', 500)
+
+print("* df.head()", df.head(), sep="\n", end="\n\n")
+print("* df.tail()", df.tail(), sep="\n", end="\n\n")
+
+# summarize the data
+# tmp = df[[u'crm_class_cd', u'ltst_geo_mkt_nm', u'crm_seg_path_cd', u'prsr_gndr_tx', u'mari_sts_cd', u'ocp_tx',
+#           u'segment_cd', u'footprint', u'in_market', u'dep_wallet', u'prim_bank_hhld', u'age_grp', u'tenure_tx']]
+# tmp['dep_wallet_num'] = tmp.dep_wallet.astype(float).fillna(0.0)
+# tmp.dtypes
+# tmp.dep_wallet_num.describe()
+
+# test = tmp.dep_wallet_num.dropna()
+# qtls = np.percentile(test, [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100])
+# qtls
+# test.groupby(pd.cut(test, qtls, include_lowest=True)).size()
+
+# convert deposit wallet into categories
+cutoff = [0, 0.001, 2500, 5000, 10000, 20000, 30000, 45000, 75000, 100000, 250000, 1000000000]
+group_names = ['00: Missing',
+               '01: 0 <- 2,500',
+               '02: 2,500 <- 5,000',
+               '03: 5,000 <- 10,000',
+               '04: 10,000 <- 20,000',
+               '05: 20,000 <- 30,000',
+               '06: 30,000 <- 45,000',
+               '07: 45,000 <- 70,000',
+               '08: 70,000 <- 100,000',
+               '09: 100,000 <- 250,000',
+               '10: 250,000+']
+df['dep_wallet_num'] = df.dep_wallet.astype(float).fillna(0.0)
+df['dep_wallet_grp'] = pd.cut(df['dep_wallet_num'], bins=cutoff, labels=group_names, include_lowest=True)
+df.groupby(['dep_wallet_grp']).size()
+
+tmp = df[[u'crm_class_cd', u'ltst_geo_mkt_nm', u'crm_seg_path_cd', u'prsr_gndr_tx', u'mari_sts_cd', u'ocp_tx',
+          u'segment_cd', u'footprint', u'in_market', u'dep_wallet_grp', u'prim_bank_hhld', u'age_grp', u'tenure_tx']]
+tmp.describe()
+
+# Feature Importance with Extra Trees Classifier
+# from sklearn.ensemble import ExtraTreesClassifier
+
+# dummy_age = pd.get_dummies(df['age_grp'], prefix='age')
+# dummy_seg = pd.get_dummies(df['segment_cd'], prefix='seg')
+# print(dummy_age.head())
+# print(dummy_seg.head())
+
+# dummy = dummy_age.join(dummy_seg)
+# print(dummy.head())
+
+# X = dummy.values
+# y = df.good.values
+# # feature extraction
+# model = ExtraTreesClassifier()
+# model.fit(X, y)
+# print(model.feature_importances_)
+# [ 0.03944558  0.08474871  0.37772854  0.06221276  0.09191253  0.1532986
+#   0.05988105  0.1074708   0.00696951  0.00775674  0.00554946  0.00302572]
+
+# sum(model.feature_importances_)
+# 1.0
+
+# entropy
+# var_list = list(df)
+# var_list = ['segment_cd', 'in_market', 'age_grp', 'tenure']
+
+
+# def cal_entropy(k1, k2):
+#     prob = []
+#     for c1 in set(k1):
+#         for c2 in set(k2):
+#             prob.append(np.mean(np.logical_and(k1 == c1, k2 == c2)))
+#
+#     return np.sum(-p * np.log2(p) for p in prob)
+
+# entropy = pd.DataFrame(columns=('var', 'entropy'))
+# for var in var_list:
+#     ent = pd.DataFrame([[var, cal_entropy(df[var], df['good'])]], columns=('var', 'entropy'))
+#     entropy = entropy.append(ent, ignore_index=True)
+# print(entropy)
+
+
+def xtab(params):
+
+    df1 = df.groupby([params, 'good']).size().to_frame().reset_index()
+    df1.columns = [params, 'good', 'count']
+    df2 = df.groupby([params]).size().to_frame().reset_index()
+    df2.columns = [params, 'bsum']
+    df3 = pd.merge(df1, df2, on=params)
+
+    def f(row):
+        if float(row['bsum']) > 0:
+            return -float(row['count'])*math.log(float(row['count'])/float(row['bsum'])+0.00000000001)
+
+    df3['numer'] = df3.apply(f, axis=1)
+    importance = -math.log(sum(df3.numer)/sum(df3.bsum)+0.00000000001)
+
+    x_df = pd.crosstab(df[params], df['good'], margins=True).reset_index()
+    x_df.columns = ['value', 'bad', 'good', 'count']
+    x_df.insert(0, 'element', str(params))
+    x_df.insert(2, 'importance', importance)
+
+    x_df['pct'] = x_df['count'].apply(lambda x: float(x)/float(x_df.iloc[-1]['count']))
+    x_df['good_pct'] = x_df.apply(lambda row: float(row['good'])/float(row['count']), axis=1)
+    x_df['bad_pct'] = x_df.apply(lambda row: float(row['bad'])/float(row['count']), axis=1)
+    x_df['cum_good'] = x_df['good'].cumsum().shift(1)
+    x_df['cum_bad'] = x_df['bad'].cumsum().shift(1)
+    x_df['cum_good_pct'] = x_df['cum_good'].apply(lambda x: float(x)/float(x_df.iloc[-1]['cum_good']))
+    x_df['cum_bad_pct'] = x_df['cum_bad'].apply(lambda x: float(x)/float(x_df.iloc[-1]['cum_bad']))
+    x_df['index'] = x_df['good_pct'].apply(lambda x: 100*float(x)/(float(x_df.iloc[-1]['good_pct'])))
+
+    def z(row):
+        if float(row['pct']) not in [0, 1]:
+            return (1/float(x_df.iloc[-1]['good'])+1/float(x_df.iloc[-1]['count']))*\
+                   (float(row['good_pct'])-float(row['pct']))/math.sqrt(float(row['pct'])*(1-float(row['pct'])))
+
+    x_df['z_score'] = x_df.apply(z, axis=1)
+    x_df['KS'] = x_df.apply(lambda row: np.round(abs(row['cum_good_pct']-row['cum_bad_pct'])*100, 2), axis=1)
+    x_tab = x_df.drop(['bad_pct', 'cum_good', 'cum_bad', 'cum_good_pct', 'cum_bad_pct'], axis=1)
+
+    return x_tab
+
+# cross tab
+var_list = ['crm_class_cd', 'ltst_geo_mkt_nm', 'crm_seg_path_cd', 'prsr_gndr_tx',
+            'mari_sts_cd', 'ocp_tx', 'segment_cd', 'footprint', 'in_market',
+            'dep_wallet_grp', 'prim_bank_hhld', 'age_grp', 'tenure_tx']
+
+cross_tab = pd.DataFrame(columns=['element', 'value', 'importance', 'bad', 'good',
+                                  'count', 'pct', 'good_pct', 'index', 'z_score', 'KS'])
+for var in var_list:
+    cross_tab = cross_tab.append(xtab(var), ignore_index=True)
+    print(xtab(var))
+
+cross_tab['colFromIndex'] = cross_tab.index
+result = cross_tab.sort(['importance', 'colFromIndex'],  ascending=[False, True]).reset_index()
+result = result.drop(['level_0', 'colFromIndex'], axis=1)
+print(result)
+
+# binning
+# ages_dict = {"1": 1, "6": 2, "7": 3, "8": 4, "9": 5, "A": 6, "?": 0, np.nan: 0}
+# df["new_age"] = df["age_rgn"].map(ages_dict)
+
+# age
+df['age_1'] = ((df['age_grp'] == '0-<17') | (df['age_grp'] == '18-<25')).astype('float')
+df['age_2'] = (df['age_grp'] == '25-<35').astype('float')
+df['age_3'] = (df['age_grp'] == '35-<50').astype('float')
+df['age_4'] = ((df['age_grp'] == '50-<65') | (df['age_grp'] == '65+') | (df['age_grp'] == 'missing')).astype('float')
+df.groupby(['age_1']).size()
+df.groupby(['age_2']).size()
+df.groupby(['age_3']).size()
+df.groupby(['age_4']).size()
+
+# primary bank
+df['prim_bank_1'] = (df['prim_bank_hhld'] == 'Y').astype('float')
+df.groupby(['prim_bank_1']).size()
+
+# deposit wallet
+df['dep_wallet_1'] = \
+    ((df['dep_wallet_grp'] == '00: Missing') | (df['dep_wallet_grp'] == '01: 0 <- 2,500')).astype('float')
+df['dep_wallet_2'] = \
+    ((df['dep_wallet_grp'] == '02: 2,500 <- 5,000') | (df['dep_wallet_grp'] == '03: 5,000 <- 10,000')).astype('float')
+df['dep_wallet_3'] = \
+    ((df['dep_wallet_grp'] == '04: 10,000 <- 20,000') |
+     (df['dep_wallet_grp'] == '05: 20,000 <- 30,000')).astype('float')
+df['dep_wallet_4'] = \
+    ((df['dep_wallet_grp'] == '06: 30,000 <- 45,000') |
+     (df['dep_wallet_grp'] == '07: 45,000 <- 70,000')).astype('float')
+df['dep_wallet_5'] = \
+    ((df['dep_wallet_grp'] == '08: 70,000 <- 100,000') |
+     (df['dep_wallet_grp'] == '09: 100,000 <- 250,000')).astype('float')
+df['dep_wallet_6'] = (df['dep_wallet_grp'] == '10: 250,000+').astype('float')
+df.groupby(['dep_wallet_1']).size()
+df.groupby(['dep_wallet_2']).size()
+df.groupby(['dep_wallet_3']).size()
+df.groupby(['dep_wallet_4']).size()
+df.groupby(['dep_wallet_5']).size()
+df.groupby(['dep_wallet_6']).size()
+
+# wealth segment
+df['wealth_seg_1'] = (df['segment_cd'] == 'C00').astype('float')
+df['wealth_seg_2'] = (df['segment_cd'] == 'C01').astype('float')
+df['wealth_seg_3'] = (df['segment_cd'] == 'C02').astype('float')
+df['wealth_seg_4'] = ((df['segment_cd'] == 'C03') | (df['segment_cd'] == 'CP4')).astype('float')
+df.groupby(['wealth_seg_1']).size()
+df.groupby(['wealth_seg_2']).size()
+df.groupby(['wealth_seg_3']).size()
+df.groupby(['wealth_seg_4']).size()
+
+# location
+df['location_1'] = (df['ltst_geo_mkt_nm'] == 'Chicago').astype('float')
+df['location_2'] = \
+    ((df['ltst_geo_mkt_nm'] == 'Central Indiana') |
+     (df['ltst_geo_mkt_nm'] == 'Central Indiana') |
+     (df['ltst_geo_mkt_nm'] == 'Central Ohio')).astype('float')
+df['location_3'] = (df['ltst_geo_mkt_nm'] == 'Northeast').astype('float')
+df.groupby(['location_1']).size()
+df.groupby(['location_2']).size()
+df.groupby(['location_3']).size()
+
+# tenure
+df['tenure_1'] = (df['tenure_tx'] == '<1 year').astype('float')
+df['tenure_2'] = (df['tenure_tx'] == '1-2 years').astype('float')
+df['tenure_3'] = (df['tenure_tx'] == '3-5 years').astype('float')
+df['tenure_4'] = (df['tenure_tx'] == '5-10 years').astype('float')
+df['tenure_5'] = ((df['tenure_tx'] == '10-25 years') | (df['tenure_tx'] == '>25 years')).astype('float')
+df.groupby(['tenure_1']).size()
+df.groupby(['tenure_2']).size()
+df.groupby(['tenure_3']).size()
+df.groupby(['tenure_4']).size()
+df.groupby(['tenure_5']).size()
+
+# occupation
+df['ocp_1'] = (df['ocp_tx'] == 'Student').astype('float')
+df.groupby(['ocp_1']).size()
+
+input_var = \
+    [
+        u'age_1',
+        u'age_2',
+        u'age_3',
+        u'age_4',
+        u'prim_bank_1',
+        u'dep_wallet_1',
+        u'dep_wallet_2',
+        u'dep_wallet_3',
+        u'dep_wallet_4',
+        u'dep_wallet_5',
+        u'dep_wallet_6',
+        u'wealth_seg_1',
+        u'wealth_seg_2',
+        u'wealth_seg_3',
+        u'wealth_seg_4',
+        u'location_1',
+        u'location_2',
+        u'location_3',
+        u'tenure_1',
+        u'tenure_2',
+        u'tenure_3',
+        u'tenure_4',
+        u'tenure_5',
+        u'ocp_1'
+    ]
+
+df[input_var].head()
+
+logit = sm.Logit(df['good'], df[input_var])
+result = logit.fit()
+print(result.summary())
+
